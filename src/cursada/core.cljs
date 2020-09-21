@@ -67,7 +67,7 @@
 (defonce app-state (atom nil))
 
 (when (nil? @app-state)
-  (go (let [response (<! (http/get "/data.json"))]
+  (go (let [response (<! (http/get "data.json"))]
         (reset! app-state {:form {:quantity 1
                                   :overlap 0}
                            :materias (:body response)}))))
