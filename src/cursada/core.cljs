@@ -36,7 +36,9 @@
     (if (and (= dia1
                 dia2)
              (or  (< ini1 ini2 fin1)
-                  (< ini1 fin2 fin1)))
+                  (< ini1 fin2 fin1)
+                  (= ini1 ini2)
+                  (= fin1 fin2)))
       (- (min (toMinutes fin1)
               (toMinutes fin2))
          (max (toMinutes ini1)
@@ -53,8 +55,10 @@
 (defn schedule [n o materias]
   (->> (for [combo  (combination n materias)]
          (->> combo
-              (map (fn [{:keys [materia comisiones]}]
-                     (map #(assoc % :materia materia)
+              (map (fn [{:keys [codigo materia comisiones]}]
+                     (map #(assoc %
+                                  :materia materia
+                                  :codigo codigo)
                           comisiones)))
               (explode)))
        (apply concat)
@@ -66,11 +70,51 @@
 
 (defonce app-state (atom nil))
 
+
 (when (nil? @app-state)
-  (go (let [response (<! (http/get "data.json"))]
+  (go (let [response (<! (http/get "/data.json"))]
         (reset! app-state {:form {:quantity 1
-                                  :overlap 0}
+                                  :select 0
+                                  :overlap 240}
                            :materias (:body response)}))))
+
+(defn autocomplete [{:keys [on-select options]}]
+  (reagent/with-let [value (atom {:index 0 :class :autocomplete-hidden})]
+    (let [{:keys [input class]} @value
+
+          fragments (->> (clojure.string/split input #"\s+")
+                         (remove empty?)
+                         (map #(re-pattern (str "(?i).*" % ".*")))
+                         seq)
+
+          matches   (fn [s]
+                      (if fragments
+                        (every? #(re-matches % s) fragments)
+                        true))]
+
+      [:div.autocomplete
+       [:input
+        {:value input
+         :on-click #(swap! value assoc :class :autocomplete-options)
+         :on-change #(->> %
+                          .-target
+                          .-value
+                          (swap! value assoc :input))}]
+       [:div {:class class}
+        (->> options
+             (keep-indexed (fn [i v]
+                             [i v]))
+             (filter (fn [[i v]] (matches v)))
+             (map (fn [[i v]]
+                    ^{:key i}
+                    [:div.autocomplete-option {:on-click #(swap! value (fn [m]
+                                                                         (and on-select (on-select {:index i :value v}))
+                                                                         (assoc m
+                                                                                :index i
+                                                                                :class :autocomplete-hidden
+                                                                                :input v)))}
+                     v])))]])))
+
 (def day-index {"Lunes"  0
                 "Martes" 1
                 "Miércoles" 2
@@ -78,73 +122,128 @@
                 "Viernes" 4
                 "Sabado" 5})
 
-(defn day-grid [combo]
-  (let [dias (->> combo
-                  (mapcat :dias)
-                  (group-by :dia)
-                  (sort-by (comp day-index first))
-                  (map (fn [[k vs]]
-                         [k (sort-by :inicio vs)]))                  
-                  )]
-    [:table
-     [:tbody
-      (for [[week-day dia] dias]
-        [:tr [:td week-day]
-         (for [{:keys [inicio fin]} dia]
-           [:td inicio "-" fin])])]]))
+(defn make-tree [fs leaf data]
+  (if (seq fs)
+    (->> data
+         (group-by (first fs))
+         (map (fn [[k vs]]
+                [k (make-tree (rest fs) leaf vs)]))
+         (into {}))
+    (leaf data)))
+(defn sort-tree [fs tree]
+  (if (seq fs)
+    (->> tree
+         (sort-by (comp (first fs) first))
+         (map (fn [[k t]]
+                [k (sort-tree (rest fs) t)])))
+    tree))
+
+(defn day-row [hours data]
+  (loop [r []
+         [i :as iis] hours]
+    (let [item (get data i)]
+      (cond
+        (empty? iis) r
+        (nil?  item) (recur (conj r [:td])
+                            (rest iis))
+        :else        (let [{:keys [duration comision materia]} item]
+                       (recur (conj r [:td {:col-span duration} materia "-" comision])
+                              (drop duration iis)))))))
+
+(defn day-grid [quantity combo]
+  (let [data (->> combo
+                  (mapcat (fn [{:keys [materia comision codigo dias]}]
+                            (map #(assoc %
+                                         :comision comision
+                                         :materia codigo )
+                                 dias))))
+
+        hours (->> data
+                   (mapcat (fn [{:keys [inicio fin]}]
+                             [inicio fin]))
+                   (into #{})
+                   (sort))
+
+        duration (let [horas-index (->> hours
+                                        (sort)
+                                        (keep-indexed (fn [i v]
+                                                        [v i]))
+                                        (into {}))]
+                   (fn [{:keys [fin inicio]}]
+                     (-
+                      (horas-index fin)
+                      (horas-index inicio))))
+        tree (->> data
+                  (map #(assoc % :duration (duration %)))
+                  (make-tree [:dia :materia :inicio] first)
+                  (sort-by (comp day-index first)))]
+    [:div 
+     [:table
+      [:thead
+       (into [:tr [:td "Día"]] (map (fn [hour]
+                                      ^{:key hour} [:td hour])
+                                    hours))]
+      (into [:tbody ]
+            (for [[day materias] tree
+                  :let [rowspan         (count materias)
+                        [first & rest] (->> materias
+                                            (map (comp (partial day-row hours) second)))]]
+              (concat [(into ^{:key first } [:tr [:td {:row-span rowspan} day]] first)]
+                      (map #(into ^{:key %} [:tr] %) rest))))]]))
 
 (defn hello-world []
   (let [{:keys [materias]
          {:keys [quantity
                  overlap
                  select
-                 selection]} :form} @app-state]
+                 selection]} :form} @app-state
+        quitar  (fn [materia]
+                  #(swap! app-state
+                          update-in [:form :selection] (fnil disj #{}) materia))
+        agregar (fn [materia]
+                  #(swap! app-state
+                          update-in [:form :selection] (fnil conj #{}) materia)) ]
     [:div
      [:h1 "Cursada Compatible"]
      [:div
-      [:div
-       [:label {:for :overlap} "Ovelap"]
+
+      [:p
+       "Se pueden superponer hasta "
        [:input {:value overlap
                 :type :number
                 :default-value 0
                 :on-change #(->> %
                                  .-target
                                  .-value
-                                 (swap! app-state assoc-in [:form :overlap]))}]]
-      [:div
-       [:label {:for :cantidad}  "Cantidad a cursar"]
+                                 (swap! app-state assoc-in [:form :overlap]))}] " minutos."]
+      [:p
+       "De las seleccionadas quiero cursar una cantidad de "
        [:input {:value quantity
                 :type :number
                 :default-value 1
                 :on-change #(->> %
                                  .-target
                                  .-value
-                                 (swap! app-state assoc-in [:form :quantity]))}]]
+                                 (swap! app-state assoc-in [:form :quantity]))}]
+       " materias."]
       [:div
-       [:label {:for :materias } "Materias"]
-       [:select {:name :materias
-                 :on-change #(->> %
-                                  .-target
-                                  .-value
-                                  (swap! app-state assoc-in [:form :select]))}
-        (keep-indexed (fn [i {:keys [materia]}]
-                        ^{:key materia} [:option {:value i} materia])
-                      materias)]
-       [:button {:on-click #(swap! app-state
-                                   update-in [:form :selection] (fnil conj #{}) (materias select))} "+"]
-       [:button {:on-click #(swap! app-state
-                                   update-in [:form :selection] (fnil disj #{}) (materias select))} "-"]]
-      [:div "Seleccionar entre:"
+       [:label {:for :materias } "Materias:"]
+       [autocomplete {:options (map :materia materias)
+                      :on-select (fn [{:keys [index]}]
+                                   ((agregar (materias index))))}]]
+      [:ul
+       (for [{:keys [codigo materia] :as select} selection]
+         ^{:key codigo} [:li codigo "-" materia [:button {:on-click (quitar select)} "- Quitar"]])]
+      [:div
+       "Cursadas:"
        (when (> quantity 0)
          (for [{combo-overlap :overlap
-                combo :combination} (schedule quantity overlap selection)]
+                combo     :combination} (schedule quantity overlap selection)]
            ^{:key combo}
            [:div
-            [:div [:span "overlap " combo-overlap]
-             (for [{:keys [comision materia]} combo]
-               ^{:key [materia comision]}
-               [:div materia comision])]
-            (day-grid combo)]))]]]))
+            [:p
+             [:span "Superposición (minutos) " combo-overlap]]
+            (day-grid quantity combo)]))]]]))
 
 (defn mount [el]
 (rdom/render [hello-world] el))
@@ -159,4 +258,4 @@
 (mount-app-element)
 
 (defn ^:after-load on-reload []
-(mount-app-element))
+  (mount-app-element))

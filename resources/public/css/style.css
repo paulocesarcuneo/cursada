@@ -1,2 +1,41 @@
 /* some style */
+table {
+    border-collapse: collapse;
+}
 
+table, th, td {
+  border: 1px solid black;
+}
+
+.autocomplete {
+  width: 24em;
+  position: relative;
+}
+
+.autocomplete input {
+  width: 100%;
+  margin: 0;
+}
+
+.autocomplete-options {
+  position: absolute;
+  border: 1px solid #d4d4d4;
+  background-color: white;
+  border-bottom: none;
+  border-top: none;
+  z-index: 99;
+  width: 100%;
+  left: 0;
+  right: 0;
+  box-sizing: border-box;
+}
+
+.autocomplete-option {
+
+}
+.autocomplete-option:hover {
+background-color: #e9e9e9;
+}
+.autocomplete-hidden {
+  display: none;
+}
