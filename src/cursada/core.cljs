@@ -72,7 +72,7 @@
 
 
 (when (nil? @app-state)
-  (go (let [response (<! (http/get "/data.json"))]
+  (go (let [response (<! (http/get "data.json"))]
         (reset! app-state {:form {:quantity 1
                                   :select 0
                                   :overlap 240}
